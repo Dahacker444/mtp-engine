@@ -1,0 +1,12 @@
+import torch
+from mtp_kernels import fused_rmsnorm,fused_rmsnorm_linear,_HAS_TRITON
+from mtp_engine import DEVICE,KVManager,SequentialMTPModule,SpeculativeDecodingEngine
+def test_rmsnorm():torch.manual_seed(0);A=torch.randn(7,32,device=DEVICE);B=torch.randn(32,device=DEVICE);C=1e-06;E=fused_rmsnorm(A,B,C);F=A*torch.rsqrt((A*A).mean(-1,keepdim=True)+C)*B;D=(E-F).abs().max().item();print(f"[rmsnorm] max_err={D:.3e}");assert D<.0001
+def test_fused_linear():torch.manual_seed(1);A=torch.randn(5,64,device=DEVICE);B=torch.randn(128,64,device=DEVICE);C=torch.randn(128,device=DEVICE);D=1e-06;F=fused_rmsnorm_linear(A,B,C,D);G=A*torch.rsqrt((A*A).mean(-1,keepdim=True)+D);H=torch.nn.functional.linear(G,B,C);E=(F-H).abs().max().item();print(f"[fused linear] max_err={E:.3e}");assert E<.0001
+class TinyMainModel(torch.nn.Module):
+	"Minimal 'main model' compatible with the engine's _main_forward\n    contract: returns (logits, hidden) where hidden has shape\n    (batch, seq, hidden_dim)."
+	def __init__(A,hidden_dim,vocab_size):C=vocab_size;B=hidden_dim;super().__init__();A.embed=torch.nn.Embedding(C,B);A.proj=torch.nn.Linear(B,C,bias=True)
+	def forward(A,ids):B=A.embed(ids);C=A.proj(B);return C,B
+def test_draft_chain():torch.manual_seed(2);E,C,D=64,256,4;G=SequentialMTPModule(E,C,D).to(DEVICE);A=3;H=torch.randn(A,E,device=DEVICE);I=torch.randn(A,C,device=DEVICE);F,B=G.draft(H,I,temperature=1.);assert B.shape==(A,D),B.shape;assert len(F)==D;assert all(B.shape==(A,C)for B in F);print(f"[draft chain] draft_tokens shape={tuple(B.shape)}");print(f"[draft chain] tokens=\n{B}")
+def test_verification_loop():torch.manual_seed(3);E,C,D=64,256,4;I=SequentialMTPModule(E,C,D).to(DEVICE);J=TinyMainModel(E,C).to(DEVICE);F=KVManager(max_seq_len=512);K=SpeculativeDecodingEngine(I,J,F,temperature=1.,depth=D);G,B=2,5;H=torch.randint(0,C,(G,B),device=DEVICE);A=K.generate(H,max_new_tokens=8);assert A.shape[0]==G;assert A.shape[1]>=B;assert A.shape[1]<=B+8*D+1;print(f"[verify loop] output shape={tuple(A.shape)}");print(f"[verify loop] kv final length={F.length}");assert torch.equal(A[:,:B],H);print('[verify loop] prompt prefix preserved: OK')
+if __name__=='__main__':print(f"DEVICE={DEVICE}  HAS_TRITON={_HAS_TRITON}");test_rmsnorm();test_fused_linear();test_draft_chain();test_verification_loop();print('\nALL TESTS PASSED')
